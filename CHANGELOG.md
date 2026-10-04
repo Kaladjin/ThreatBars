@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.2] - 2026-10-04
+- Correctif : erreur Lua « attempt to compare … secret string value » quand Blizzard rend les valeurs de menace secrètes (certains contenus). Le meter continue d'afficher la menace et le % du tank ; l'écart coloré et l'alerte restent indisponibles tant que les valeurs sont secrètes.
+
 ## [0.3.1] - 2026-10-04
 - La menace s'affiche à l'échelle des autres threat meters (valeur brute du serveur, ×100 par rapport à avant).
 - Celui qui a l'aggro affiche **100 %** en vert, en groupe comme en solo.

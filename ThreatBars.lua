@@ -1,5 +1,5 @@
 --[[
-ThreatBars 0.3.1 — threat meter pour WoW: Forever (interface 16001)
+ThreatBars 0.3.2 — threat meter pour WoW: Forever (interface 16001)
 Apparence calquée sur le damage meter intégré de Blizzard (Blizzard_DamageMeter) :
 mêmes atlas, polices, hauteur de barre (25) et espacement (4).
 
@@ -350,24 +350,41 @@ local function SetClassVisuals(e, class)
     if not oka then e.Icon:SetTexture(nil) end
 end
 
--- "1.25M" pour le tank, "1.16M  -7%" pour les autres
+-- "1.25M  100%" pour le tank, "1.16M  -7%" pour les autres.
+-- ATTENTION : sur certains contenus Blizzard rend toutes ces valeurs "secrètes".
+-- Une chaîne secrète peut être testée (if v then) et affichée, mais JAMAIS comparée
+-- (v ~= "" fait planter l'addon), ni utilisée en calcul.
 local function SetValueText(fs, r)
-    -- valeur brute renvoyée par le serveur (échelle x100, comme les autres threat meters)
-    local v = Abbrev(r.value) or ""
+    -- valeur brute du serveur (échelle x100, comme les autres threat meters) ;
+    -- nil, chaîne normale, ou chaîne secrète si la valeur l'est
+    local v = Abbrev(r.value)
+
     if SafeTrue(r.tanking) then
-        local ok = pcall(fs.SetFormattedText, fs, "%s  |cff40ff40100%%|r", v)
-        if not ok then fs:SetText("|cff40ff40100%|r") end
+        if v then
+            if pcall(fs.SetFormattedText, fs, "%s  |cff40ff40100%%|r", v) then return end
+        end
+        fs:SetText("|cff40ff40100%|r")
         return
     end
+
     if Usable(r.raw) then
         local d = r.raw - 100
         local col = d >= 0 and "ff4040" or "b0b0b0"
-        local ok = pcall(fs.SetFormattedText, fs, "%s  |cff%s%+d%%|r", v, col, math.floor(d + (d >= 0 and 0.5 or -0.5)))
+        local ok = pcall(fs.SetFormattedText, fs, "%s  |cff%s%+d%%|r", v or "", col, math.floor(d + (d >= 0 and 0.5 or -0.5)))
         if ok then return end
     end
-    -- valeurs secrètes : on affiche le % de la menace du tank tel que donné par le serveur
-    local fmt = (v ~= "") and "%s  (%.0f%%)" or "%s%.0f%%"
-    if not pcall(fs.SetFormattedText, fs, fmt, v, r.raw) then fs:SetText(v) end
+
+    -- valeurs secrètes : pas de calcul possible, on affiche le % de la menace du tank
+    -- tel que donné par le serveur (le formatage d'un secret est autorisé)
+    local ok
+    if v then
+        ok = pcall(fs.SetFormattedText, fs, "%s  (%.0f%%)", v, r.raw)
+    else
+        ok = pcall(fs.SetFormattedText, fs, "%.0f%%", r.raw)
+    end
+    if not ok then
+        if not (v and pcall(fs.SetText, fs, v)) then fs:SetText("") end
+    end
 end
 
 -- PlaySound n'a pas de paramètre de volume : on joue le son sur le canal "Dialog"
