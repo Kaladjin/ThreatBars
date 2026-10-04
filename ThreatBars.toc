@@ -1,0 +1,10 @@
+## Interface: 16001
+## Title: ThreatBars
+## Notes: Threat meter pour WoW Forever (UnitDetailedThreatSituation, sans combat log). /tb
+## Version: 0.3.1
+## X-License: GPL-3.0-or-later
+## SavedVariables: ThreatBarsDB
+## IconTexture: Interface\Icons\Ability_Warrior_DefensiveStance
+
+ThreatBars.lua
+Options.lua

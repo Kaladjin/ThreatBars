@@ -1,0 +1,48 @@
+# Publie une release GitHub avec le zip de l'addon à chaque tag vX.Y.Z
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Vérifier que la version du .toc correspond au tag
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          TOC=$(grep -m1 '^## Version:' ThreatBars.toc | sed 's/## Version: *//' | tr -d '\r')
+          if [ "$TAG" != "$TOC" ]; then
+            echo "::error::Tag v$TAG mais ThreatBars.toc indique $TOC"
+            exit 1
+          fi
+
+      - name: Construire le zip
+        run: |
+          mkdir -p dist/ThreatBars
+          cp ThreatBars.toc ThreatBars.lua Options.lua LICENSE CHANGELOG.md dist/ThreatBars/
+          cd dist && zip -r "ThreatBars-${GITHUB_REF_NAME}.zip" ThreatBars
+
+      - name: Extraire les notes de version du CHANGELOG
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          awk -v v="$VER" '
+            $0 ~ "^## \\[?" v "\\]?" {on=1; next}
+            on && /^## / {exit}
+            on {print}
+          ' CHANGELOG.md > notes.md
+          [ -s notes.md ] || echo "Version $VER" > notes.md
+
+      - name: Créer la release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" "dist/ThreatBars-${GITHUB_REF_NAME}.zip" \
+            --title "ThreatBars ${GITHUB_REF_NAME}" --notes-file notes.md
