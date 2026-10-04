@@ -1,10 +1,17 @@
-# Publie une release GitHub avec le zip de l'addon à chaque tag vX.Y.Z
+# Publie automatiquement une release quand la version du .toc change.
+# Pour sortir une version : changer "## Version:" dans ThreatBars.toc,
+# ajouter une section "## [X.Y.Z]" dans CHANGELOG.md, puis pousser sur main.
 name: Release
 
 on:
   push:
-    tags:
-      - "v*"
+    branches: [main]
+    paths:
+      - "ThreatBars.toc"
+      - "*.lua"
+      - "CHANGELOG.md"
+      - ".github/workflows/release.yml"
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -15,34 +22,49 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Vérifier que la version du .toc correspond au tag
+      - name: Lire la version du .toc
+        id: ver
         run: |
-          TAG="${GITHUB_REF_NAME#v}"
-          TOC=$(grep -m1 '^## Version:' ThreatBars.toc | sed 's/## Version: *//' | tr -d '\r')
-          if [ "$TAG" != "$TOC" ]; then
-            echo "::error::Tag v$TAG mais ThreatBars.toc indique $TOC"
-            exit 1
+          VER=$(grep -m1 '^## Version:' ThreatBars.toc | sed 's/## Version: *//' | tr -d '\r ')
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VER" >> "$GITHUB_OUTPUT"
+
+      - name: Release déjà publiée ?
+        id: exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "${{ steps.ver.outputs.tag }}" >/dev/null 2>&1; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "La release ${{ steps.ver.outputs.tag }} existe déjà : rien à faire."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Construire le zip
+        if: steps.exists.outputs.skip == 'false'
         run: |
           mkdir -p dist/ThreatBars
           cp ThreatBars.toc ThreatBars.lua Options.lua LICENSE CHANGELOG.md dist/ThreatBars/
-          cd dist && zip -r "ThreatBars-${GITHUB_REF_NAME}.zip" ThreatBars
+          cd dist && zip -r "ThreatBars-${{ steps.ver.outputs.tag }}.zip" ThreatBars
 
-      - name: Extraire les notes de version du CHANGELOG
+      - name: Notes de version (section du CHANGELOG)
+        if: steps.exists.outputs.skip == 'false'
         run: |
-          VER="${GITHUB_REF_NAME#v}"
-          awk -v v="$VER" '
+          awk -v v="${{ steps.ver.outputs.version }}" '
             $0 ~ "^## \\[?" v "\\]?" {on=1; next}
             on && /^## / {exit}
             on {print}
           ' CHANGELOG.md > notes.md
-          [ -s notes.md ] || echo "Version $VER" > notes.md
+          [ -s notes.md ] || echo "Version ${{ steps.ver.outputs.version }}" > notes.md
 
-      - name: Créer la release
+      - name: Créer la release (et son tag)
+        if: steps.exists.outputs.skip == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" "dist/ThreatBars-${GITHUB_REF_NAME}.zip" \
-            --title "ThreatBars ${GITHUB_REF_NAME}" --notes-file notes.md
+          gh release create "${{ steps.ver.outputs.tag }}" \
+            "dist/ThreatBars-${{ steps.ver.outputs.tag }}.zip" \
+            --target "$GITHUB_SHA" \
+            --title "ThreatBars ${{ steps.ver.outputs.tag }}" \
+            --notes-file notes.md
