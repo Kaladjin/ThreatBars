@@ -193,6 +193,19 @@ local function Build()
     controls[#controls + 1] = preview
     y = y - 30
 
+    Heading(panel, "Historique", y); y = y - 26
+    local clearBtn = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+    clearBtn:SetSize(150, 22)
+    clearBtn:SetPoint("TOPLEFT", 16, y)
+    clearBtn:SetText("Effacer l'historique")
+    clearBtn:SetScript("OnClick", function() ns.ClearLog() end)
+    local logHint = panel:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    logHint:SetPoint("LEFT", clearBtn, "RIGHT", 8, 0)
+    logHint:SetPoint("RIGHT", panel, "RIGHT", -14, 0)
+    logHint:SetJustifyH("LEFT")
+    logHint:SetText("10 dernières rencontres")
+    y = y - 34
+
     panel:SetHeight(-y + 10)
 
     panel:SetScript("OnShow", function()

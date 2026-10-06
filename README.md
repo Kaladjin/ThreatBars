@@ -19,11 +19,20 @@ Pour être prévenu des nouvelles versions : bouton **Watch → Custom → Relea
 
 | Ligne | Affichage |
 |---|---|
-| Celui qui a l'aggro | menace brute + **100 %** en vert, ex. `125M  100%` |
-| Les autres | menace brute + écart avec le tank, ex. `116M  -7%` |
+| Celui qui a l'aggro | menace (menace/seconde) + **100 %** en vert, ex. `125M (2.1M)  100%` |
+| Les autres | menace (menace/seconde) + écart avec le tank, ex. `116M (1.9M)  -7%` |
 
 - L'écart passe en **rouge** quand il devient positif : en mêlée, tu es à moins de 10 % de reprendre l'aggro.
+- La menace par seconde est une moyenne depuis que le mob est suivi.
+- Le chronomètre du combat s'affiche à gauche de l'en-tête.
 - Cible un allié : le meter suit sa cible (pratique pour les heals).
+- Quand un joueur ennemi (PvP) est proche, Blizzard masque les valeurs de menace aux addons : le meter passe alors en affichage simple (menace + % du tank en gris, sans écart ni alerte) et revient à la normale tout seul.
+
+## 📜 Historique
+
+Le bouton **Actuel** dans l'en-tête (à la même place que sur le meter Blizzard) ouvre la liste des **10 dernières rencontres** : nom du mob, durée et heure. En choisir une affiche l'état figé en fin de combat. Au prochain combat, le meter revient automatiquement sur « Actuel ».
+
+Une rencontre = un combat. Si tu as ciblé plusieurs mobs, c'est celui suivi le plus longtemps qui est gardé (les autres sont comptés en `+N`). Seuls les mobs que tu as ciblés sont suivis.
 
 ## 🔔 Alerte
 
@@ -38,6 +47,7 @@ Roue crantée dans l'en-tête du meter, ou `/tb`.
 - Afficher seulement en combat
 - Opacité du fond et opacité générale
 - Verrouiller la position, aperçu avec barres factices
+- Effacer l'historique
 
 Déplacer : glisser l'en-tête. Redimensionner : coin bas-droit.
 
@@ -52,6 +62,7 @@ Déplacer : glisser l'en-tête. Redimensionner : coin bas-droit.
 | `/tb volume 50` | volume de l'alerte |
 | `/tb show` / `/tb hide` | affiche / masque |
 | `/tb reset` | réglages par défaut |
+| `/tb clearlog` | efface l'historique |
 | `/tb probe` | diagnostic (à lancer en combat pour un rapport de bug) |
 
 ## 🐛 Signaler un bug

@@ -1,5 +1,5 @@
 --[[
-ThreatBars 0.3.2 — threat meter pour WoW: Forever (interface 16001)
+ThreatBars 0.4.0 — threat meter pour WoW: Forever (interface 16001)
 Apparence calquée sur le damage meter intégré de Blizzard (Blizzard_DamageMeter) :
 mêmes atlas, polices, hauteur de barre (25) et espacement (4).
 
@@ -27,10 +27,12 @@ local DEFAULTS = {
     alpha      = 100,   -- opacité générale du meter
     pets       = true,
     minimized  = false,
+    log        = {},    -- dernières rencontres (instantanés de fin de combat)
     hidden     = false,
 }
 
 local BAR_H, BAR_SPACING, HEADER_H = 25, 4, 32 -- valeurs du meter Blizzard
+local LOG_MAX = 10 -- rencontres gardées dans l'historique
 local TICK = 0.25
 local db
 
@@ -118,6 +120,12 @@ end
 
 local rows, pool = {}, {}
 
+-- Combat en cours et historique
+--   fight = { start = GetTime(), mobs = { [clé] = { name, first, last, snap, snapAt } } }
+--   view  = 0 : affichage en direct ; n > 0 : rencontre n de db.log (1 = la plus récente)
+local fight
+local view = 0
+
 local function Collect(mob)
     for i = #rows, 1, -1 do pool[#pool + 1] = rows[i]; rows[i] = nil end
     if not mob then return end
@@ -133,6 +141,7 @@ local function Collect(mob)
                     seen[key] = true
                     local r = table.remove(pool) or {}
                     r.tanking, r.scaled, r.raw, r.value = isTanking, scaled, raw, value
+                    r.tps = nil
                     r.name = UnitName(unit)
                     local _, class = UnitClass(unit)
                     r.class = class
@@ -199,7 +208,7 @@ titleText:SetText("Menace")
 
 local mobText = header:CreateFontString(nil, "OVERLAY", "GameFontNormalMed1")
 mobText:SetPoint("LEFT", titleText, "RIGHT", 8, 0)
-mobText:SetPoint("RIGHT", header, "RIGHT", -52, 0)
+-- (ancré à droite plus bas, contre le sélecteur de session)
 mobText:SetJustifyH("LEFT")
 mobText:SetWordWrap(false)
 mobText:SetTextColor(1, 1, 1)
@@ -229,6 +238,19 @@ else
     optBtn:SetNormalTexture("Interface\\Buttons\\UI-OptionsButton")
     optBtn:SetHighlightTexture("Interface\\Buttons\\UI-Common-MouseHilight", "ADD")
 end
+
+-- Sélecteur de session, à la même place que sur le meter Blizzard :
+-- "Actuel" (direct) ou une des dernières rencontres. Menu natif via MenuUtil.
+local sessionBtn = CreateFrame("Button", nil, header)
+sessionBtn:SetHeight(20)
+sessionBtn:SetPoint("RIGHT", optBtn, "LEFT", -4, 1)
+sessionBtn.Label = sessionBtn:CreateFontString(nil, "OVERLAY", "GameFontNormalMed1")
+sessionBtn.Label:SetPoint("CENTER")
+local sessionHL = sessionBtn:CreateTexture(nil, "HIGHLIGHT")
+sessionHL:SetAllPoints()
+sessionHL:SetColorTexture(1, 1, 1, 0.12)
+
+mobText:SetPoint("RIGHT", sessionBtn, "LEFT", -6, 0)
 
 local body = CreateFrame("Frame", nil, frame)
 body:SetPoint("TOPLEFT", header, "BOTTOMLEFT", 0, 0)
@@ -350,7 +372,7 @@ local function SetClassVisuals(e, class)
     if not oka then e.Icon:SetTexture(nil) end
 end
 
--- "1.25M  100%" pour le tank, "1.16M  -7%" pour les autres.
+-- "125M (2.1M)  100%" pour le tank, "116M (1.9M)  -7%" pour les autres (TPS entre parenthèses).
 -- ATTENTION : sur certains contenus Blizzard rend toutes ces valeurs "secrètes".
 -- Une chaîne secrète peut être testée (if v then) et affichée, mais JAMAIS comparée
 -- (v ~= "" fait planter l'addon), ni utilisée en calcul.
@@ -358,6 +380,14 @@ local function SetValueText(fs, r)
     -- valeur brute du serveur (échelle x100, comme les autres threat meters) ;
     -- nil, chaîne normale, ou chaîne secrète si la valeur l'est
     local v = Abbrev(r.value)
+    -- menace par seconde entre parenthèses, comme les DPS du meter Blizzard : "125M (2.08M)"
+    if v and r.tps and Usable(r.tps) then
+        local t = Abbrev(r.tps)
+        if t then
+            local ok, txt = pcall(string.format, "%s (%s)", v, t)
+            if ok then v = txt end
+        end
+    end
 
     if SafeTrue(r.tanking) then
         if v then
@@ -374,13 +404,13 @@ local function SetValueText(fs, r)
         if ok then return end
     end
 
-    -- valeurs secrètes : pas de calcul possible, on affiche le % de la menace du tank
-    -- tel que donné par le serveur (le formatage d'un secret est autorisé)
+    -- valeurs secrètes : pas de calcul possible, on affiche en gris le % de la menace
+    -- du tank tel que donné par le serveur (le formatage d'un secret est autorisé)
     local ok
     if v then
-        ok = pcall(fs.SetFormattedText, fs, "%s  (%.0f%%)", v, r.raw)
+        ok = pcall(fs.SetFormattedText, fs, "%s  |cff909090%.0f%%|r", v, r.raw)
     else
-        ok = pcall(fs.SetFormattedText, fs, "%.0f%%", r.raw)
+        ok = pcall(fs.SetFormattedText, fs, "|cff909090%.0f%%|r", r.raw)
     end
     if not ok then
         if not (v and pcall(fs.SetText, fs, v)) then fs:SetText("") end
@@ -429,24 +459,171 @@ local function Alert()
     end
 end
 
-local function Render()
-    if db.minimized then return end
-    local mob
-    if testMode then
-        wipe(rows)
-        local fake = {
-            { "Kaladjin", "WARRIOR", true, 100, 100, 125000000 },
-            { "Furtif", "ROGUE", false, 85, 93, 116250000 },
-            { "Givre", "MAGE", false, 55, 71, 88750000 },
-            { "Lumière", "PRIEST", false, 17, 22, 27500000 },
-        }
-        for _, f in ipairs(fake) do
-            rows[#rows + 1] = { name = f[1], class = f[2], tanking = f[3], scaled = f[4], raw = f[5], value = f[6] }
-        end
-        mobText:SetText("Mannequin d'entraînement")
+local function FormatClock(sec)
+    sec = math.max(0, math.floor(sec + 0.5))
+    if type(SecondsToClock) == "function" then
+        local ok, txt = pcall(SecondsToClock, sec)
+        if ok and txt then return txt end
+    end
+    return string.format("%d:%02d", math.floor(sec / 60), sec % 60)
+end
+
+local function LogEntryLabel(e)
+    local name = e.mob or "?"
+    if e.others and e.others > 0 then name = name .. " (+" .. e.others .. ")" end
+    return string.format("%s [%s]  %s", name, FormatClock(e.duration or 0), date("%H:%M", e.at or 0))
+end
+ns.LogEntryLabel = LogEntryLabel
+
+local function UpdateSessionLabel()
+    sessionBtn.Label:SetText(view == 0 and "Actuel" or ("#" .. view))
+    sessionBtn:SetWidth(sessionBtn.Label:GetStringWidth() + 12)
+end
+
+local function SetView(i)
+    if not db.log[i] then i = 0 end
+    view = i
+    UpdateSessionLabel()
+    if ns.MarkDirty then ns.MarkDirty() end
+end
+
+-- Menu des sessions : rencontres passées (la plus ancienne en haut), séparateur, puis "Actuel",
+-- dans le même ordre que le meter Blizzard.
+local function BuildSessionMenu(_, root)
+    local function IsSelected(i) return view == i end
+    local function Select(i) SetView(i) end
+    for i = #db.log, 1, -1 do
+        root:CreateRadio(LogEntryLabel(db.log[i]), IsSelected, Select, i)
+    end
+    if #db.log > 0 then root:CreateDivider() end
+    root:CreateRadio("Actuel", IsSelected, Select, 0)
+end
+
+sessionBtn:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+sessionBtn:SetScript("OnClick", function(self, button)
+    if MenuUtil and MenuUtil.CreateContextMenu then
+        MenuUtil.CreateContextMenu(self, BuildSessionMenu)
     else
+        -- repli sans menu : clic gauche = rencontre plus ancienne, clic droit = retour au direct
+        if button == "RightButton" then SetView(0)
+        else SetView(view < #db.log and view + 1 or 0) end
+    end
+end)
+sessionBtn:SetScript("OnEnter", function(self)
+    GameTooltip:SetOwner(self, "ANCHOR_TOP")
+    GameTooltip:SetText("Session")
+    GameTooltip:AddLine("Direct ou une des " .. LOG_MAX .. " dernières rencontres", 1, 1, 1)
+    GameTooltip:Show()
+end)
+sessionBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
+----------------------------------------------------------------------
+-- Suivi du combat : TPS et instantanés pour l'historique
+----------------------------------------------------------------------
+local function MobKey(mob)
+    local g = UnitGUID(mob)
+    if Usable(g) then return g end
+    local n = UnitName(mob)
+    if Usable(n) then return n end
+end
+
+-- Appelé à chaque rafraîchissement en direct. Calcule le TPS de chaque ligne
+-- (menace / temps depuis que ce mob est suivi) et garde le dernier état lisible.
+local function Track(mob, now)
+    if not fight or not mob or #rows == 0 then return end
+    local key = MobKey(mob)
+    if not key then return end
+    local m = fight.mobs[key]
+    if not m then
+        local n = UnitName(mob)
+        m = { name = Usable(n) and n or "?", first = now }
+        fight.mobs[key] = m
+    end
+    m.last = now
+
+    local dur = now - m.first
+    local snap = {}
+    for _, r in ipairs(rows) do
+        if dur >= 1 and Usable(r.value) then r.tps = r.value / dur end
+        -- les valeurs secrètes ne peuvent ni être calculées ni sauvegardées
+        if snap and Usable(r.value) and Usable(r.raw) and Usable(r.name) then
+            snap[#snap + 1] = {
+                name = r.name, class = Usable(r.class) and r.class or nil,
+                value = r.value, raw = r.raw,
+                tanking = SafeTrue(r.tanking), isPlayer = SafeTrue(r.isPlayer),
+            }
+        else
+            snap = nil
+        end
+    end
+    if snap then m.snap, m.snapAt = snap, now end
+end
+
+local function StartFight()
+    fight = { start = GetTime(), mobs = {} }
+    if view ~= 0 then SetView(0) end -- en combat on revient au direct
+end
+
+-- Fin de combat : on garde le mob suivi le plus longtemps (les autres sont comptés en "+N")
+local function EndFight()
+    if not fight then return end
+    local best, count = nil, 0
+    for _, m in pairs(fight.mobs) do
+        if m.snap then
+            count = count + 1
+            if not best or (m.last - m.first) > (best.last - best.first) then best = m end
+        end
+    end
+    if best then
+        local dur = math.max(1, best.snapAt - best.first)
+        for _, r in ipairs(best.snap) do r.tps = r.value / dur end
+        table.insert(db.log, 1, {
+            mob = best.name, others = count - 1, at = time(),
+            duration = GetTime() - fight.start, rows = best.snap,
+        })
+        while #db.log > LOG_MAX do table.remove(db.log) end
+        if view > 0 then SetView(math.min(view + 1, LOG_MAX)) end -- reste sur la même rencontre
+    end
+    fight = nil
+end
+
+ns.ClearLog = function()
+    wipe(db.log)
+    SetView(0)
+end
+
+----------------------------------------------------------------------
+-- Rendu
+----------------------------------------------------------------------
+local FAKE = {
+    { name = "Kaladjin", class = "WARRIOR", tanking = true, isPlayer = true, scaled = 100, raw = 100, value = 125000000 },
+    { name = "Furtif", class = "ROGUE", scaled = 85, raw = 93, value = 116250000 },
+    { name = "Givre", class = "MAGE", scaled = 55, raw = 71, value = 88750000 },
+    { name = "Lumière", class = "PRIEST", scaled = 17, raw = 22, value = 27500000 },
+}
+for _, f in ipairs(FAKE) do f.tps = f.value / 60 end
+
+local function Render()
+    local now = GetTime()
+    local list, mob, live = rows, nil, false
+
+    if testMode then
+        list = FAKE
+        titleText:SetText("[" .. FormatClock(60) .. "]")
+        mobText:SetText("Mannequin d'entraînement")
+    elseif view > 0 and db.log[view] then
+        local e = db.log[view]
+        list = e.rows
+        titleText:SetText("[" .. FormatClock(e.duration or 0) .. "]")
+        local name = e.mob or "?"
+        if e.others and e.others > 0 then name = name .. " |cff999999(+" .. e.others .. ")|r" end
+        mobText:SetText(name)
+    else
+        live = true
         mob = PickMob()
         Collect(mob)
+        Track(mob, now)
+        titleText:SetText(fight and ("[" .. FormatClock(now - fight.start) .. "]") or "Menace")
         if mob then
             if not pcall(mobText.SetText, mobText, UnitName(mob)) then mobText:SetText("") end
         else
@@ -454,22 +631,24 @@ local function Render()
         end
     end
 
+    if db.minimized then return end
+
     -- Échelle des barres : la plus haute menace remplit la barre (comme le meter Blizzard)
     local maxRaw = 100
-    for _, r in ipairs(rows) do
+    for _, r in ipairs(list) do
         if Usable(r.raw) and r.raw > maxRaw then maxRaw = r.raw end
     end
 
     local avail = math.max(1, math.floor((body:GetHeight() + BAR_SPACING) / (BAR_H + BAR_SPACING)))
-    -- Alerte si : je tanke et un autre approche du pull, ou c'est moi qui approche du pull
+    -- Alerte (direct uniquement) : je tanke et un autre approche du pull, ou c'est moi qui approche
     local alert = false
     local iTank = false
-    for _, r in ipairs(rows) do
+    for _, r in ipairs(list) do
         if SafeTrue(r.tanking) and SafeTrue(r.isPlayer) then iTank = true end
     end
 
-    for i = 1, math.max(#bars, math.min(#rows, avail)) do
-        local r = rows[i]
+    for i = 1, math.max(#bars, math.min(#list, avail)) do
+        local r = list[i]
         if r and i <= avail then
             local e = GetBar(i)
             e.bar:SetMinMaxValues(0, maxRaw)
@@ -478,7 +657,7 @@ local function Render()
             if not pcall(e.bar.Name.SetText, e.bar.Name, r.name) then e.bar.Name:SetText("?") end
             SetValueText(e.bar.Value, r)
             e:Show()
-            if db.alertOn and not alert and not SafeTrue(r.tanking) and (iTank or SafeTrue(r.isPlayer))
+            if live and db.alertOn and not alert and not SafeTrue(r.tanking) and (iTank or SafeTrue(r.isPlayer))
                 and Usable(r.scaled) and r.scaled >= db.warn then
                 alert = true
             end
@@ -487,14 +666,14 @@ local function Render()
         end
     end
 
-    if #rows == 0 then
+    if #list == 0 then
         emptyText:SetText(mob and "Pas de menace sur cette cible" or "Aucune cible")
         emptyText:Show()
     else
         emptyText:Hide()
     end
 
-    if alert and not testMode then Alert() end
+    if alert then Alert() end
 end
 
 ----------------------------------------------------------------------
@@ -527,6 +706,8 @@ function events:ADDON_LOADED(name)
     RestoreDialogVolume() -- au cas où un /reload a coupé la restauration
     ApplyLayout()
     inCombat = InCombatLockdown() and true or false
+    if inCombat then StartFight() end
+    UpdateSessionLabel()
     UpdateVisibility()
     frame:UnregisterEvent("ADDON_LOADED")
 end
@@ -540,10 +721,13 @@ function events:UNIT_THREAT_LIST_UPDATE() dirty = true end
 function events:UNIT_THREAT_SITUATION_UPDATE() dirty = true end
 function events:PLAYER_REGEN_DISABLED()
     inCombat = true
+    StartFight()
     UpdateVisibility()
 end
 function events:PLAYER_REGEN_ENABLED()
     inCombat = false
+    if fight then Render() end -- dernier relevé avant de clore le combat
+    EndFight()
     dirty = true
     -- en mode "combat seulement", on laisse le meter 3 s pour lire l'état final
     if db.combatOnly and not testMode and not optionsOpen then
@@ -559,6 +743,7 @@ end)
 for ev in pairs(events) do frame:RegisterEvent(ev) end
 
 frame:SetScript("OnSizeChanged", function() dirty = true end)
+ns.MarkDirty = function() dirty = true end
 
 -- Les events de menace sont irréguliers : petit rafraîchissement cadencé en plus
 frame:SetScript("OnUpdate", function(_, dt)
@@ -616,8 +801,9 @@ SlashCmdList.THREATBARS = function(msg)
         wipe(ThreatBarsDB); CopyDefaults(ThreatBarsDB, DEFAULTS); db = ThreatBarsDB
         ApplyLayout(); UpdateVisibility(); if ns.RefreshOptions then ns.RefreshOptions() end
     elseif cmd == "probe" then Probe()
+    elseif cmd == "clearlog" then ns.ClearLog(); Print("historique effacé")
     else
-        Print("/tb (options) | test | lock | unlock | warn <%> | volume <0-100> | pets | show | hide | reset | probe")
+        Print("/tb (options) | test | lock | unlock | warn <%> | volume <0-100> | pets | show | hide | reset | clearlog | probe")
     end
     dirty = true
 end

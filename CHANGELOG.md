@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.0] - 2026-10-06
+- **Menace par seconde** entre parenthèses à côté de la valeur, comme les DPS du meter Blizzard : `125M (2.1M)  100%`. Moyenne depuis que le mob est suivi.
+- **Historique des 10 dernières rencontres** : sélecteur de session dans l'en-tête (même place que sur le meter Blizzard), « Actuel » ou une rencontre passée avec sa durée et son heure. L'état de fin de combat est figé (menace, TPS, écart).
+- Chronomètre du combat dans l'en-tête.
+- En combat, le meter revient automatiquement sur « Actuel ».
+- Options : bouton « Effacer l'historique » ; commande `/tb clearlog`.
+- Quand les valeurs sont secrètes, le % du tank s'affiche en gris (plus entre parenthèses, pour ne pas le confondre avec le TPS).
+
 ## [0.3.2] - 2026-10-04
 - Correctif : erreur Lua « attempt to compare … secret string value » quand Blizzard rend les valeurs de menace secrètes (certains contenus). Le meter continue d'afficher la menace et le % du tank ; l'écart coloré et l'alerte restent indisponibles tant que les valeurs sont secrètes.
 
