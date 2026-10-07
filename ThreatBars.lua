@@ -1,5 +1,5 @@
 --[[
-ThreatBars 0.4.0 — threat meter pour WoW: Forever (interface 16001)
+ThreatBars 0.5.0 — threat meter pour WoW: Forever (interface 16001)
 Apparence calquée sur le damage meter intégré de Blizzard (Blizzard_DamageMeter) :
 mêmes atlas, polices, hauteur de barre (25) et espacement (4).
 
@@ -288,12 +288,10 @@ alertTex:Hide()
 
 -- Ligne = copie du DamageMeterEntryTemplate (style "Default")
 local bars = {}
-local function GetBar(i)
-    if bars[i] then return bars[i] end
-    local e = CreateFrame("Frame", nil, body)
+-- Une ligne au format du meter Blizzard (icône + barre + nom + valeur), réutilisée par le détail
+local function CreateEntry(parent)
+    local e = CreateFrame("Frame", nil, parent)
     e:SetHeight(BAR_H)
-    e:SetPoint("TOPLEFT", 0, -(i - 1) * (BAR_H + BAR_SPACING) - 2)
-    e:SetPoint("RIGHT", body, "RIGHT", -15, 0)
 
     e.Icon = e:CreateTexture(nil, "ARTWORK")
     e.Icon:SetSize(BAR_H - 1, BAR_H - 1)
@@ -333,6 +331,20 @@ local function GetBar(i)
     sb.Name:SetWordWrap(false)
 
     e.bar, e.barTex = sb, barTex
+    return e
+end
+ns.CreateEntry = CreateEntry
+
+local function GetBar(i)
+    if bars[i] then return bars[i] end
+    local e = CreateEntry(body)
+    e:SetPoint("TOPLEFT", 0, -(i - 1) * (BAR_H + BAR_SPACING) - 2)
+    e:SetPoint("RIGHT", body, "RIGHT", -15, 0)
+    -- clic (comme le meter Blizzard) : détail par capacité ; Maj+clic = fenêtre épinglée
+    e:EnableMouse(true)
+    e:SetScript("OnMouseDown", function(self, button)
+        if ns.OnEntryClick then ns.OnEntryClick(self.row, button) end
+    end)
     bars[i] = e
     return e
 end
@@ -561,6 +573,7 @@ end
 
 local function StartFight()
     fight = { start = GetTime(), mobs = {} }
+    if ns.BD_Start then ns.BD_Start() end
     if view ~= 0 then SetView(0) end -- en combat on revient au direct
 end
 
@@ -574,18 +587,26 @@ local function EndFight()
             if not best or (m.last - m.first) > (best.last - best.first) then best = m end
         end
     end
+    local fightDur = GetTime() - fight.start
+    local breakdown = ns.BD_Finish and ns.BD_Finish(fightDur)
     if best then
         local dur = math.max(1, best.snapAt - best.first)
         for _, r in ipairs(best.snap) do r.tps = r.value / dur end
         table.insert(db.log, 1, {
             mob = best.name, others = count - 1, at = time(),
-            duration = GetTime() - fight.start, rows = best.snap,
+            duration = fightDur, rows = best.snap, breakdown = breakdown,
         })
         while #db.log > LOG_MAX do table.remove(db.log) end
         if view > 0 then SetView(math.min(view + 1, LOG_MAX)) end -- reste sur la même rencontre
     end
     fight = nil
 end
+
+ns.Usable, ns.SafeTrue, ns.Abbrev, ns.FormatClock = Usable, SafeTrue, Abbrev, FormatClock
+ns.PickMob, ns.MobKey = PickMob, MobKey
+ns.BAR_H, ns.BAR_SPACING = BAR_H, BAR_SPACING
+ns.GetView = function() return view end
+ns.InFight = function() return fight ~= nil end
 
 ns.ClearLog = function()
     wipe(db.log)
@@ -656,6 +677,7 @@ local function Render()
             SetClassVisuals(e, r.class)
             if not pcall(e.bar.Name.SetText, e.bar.Name, r.name) then e.bar.Name:SetText("?") end
             SetValueText(e.bar.Value, r)
+            e.row = r
             e:Show()
             if live and db.alertOn and not alert and not SafeTrue(r.tanking) and (iTank or SafeTrue(r.isPlayer))
                 and Usable(r.scaled) and r.scaled >= db.warn then
@@ -802,8 +824,12 @@ SlashCmdList.THREATBARS = function(msg)
         ApplyLayout(); UpdateVisibility(); if ns.RefreshOptions then ns.RefreshOptions() end
     elseif cmd == "probe" then Probe()
     elseif cmd == "clearlog" then ns.ClearLog(); Print("historique effacé")
+    elseif cmd == "rec" then
+        db.recordDebug = not db.recordDebug
+        if not db.recordDebug then db.debugRec = nil end
+        Print(db.recordDebug and "enregistrement brut ON : le dernier combat sera sauvegardé dans WTF\\Account\\<compte>\\SavedVariables\\ThreatBars.lua (après /reload ou déconnexion)" or "enregistrement brut OFF")
     else
-        Print("/tb (options) | test | lock | unlock | warn <%> | volume <0-100> | pets | show | hide | reset | clearlog | probe")
+        Print("/tb (options) | test | lock | unlock | warn <%> | volume <0-100> | pets | show | hide | reset | clearlog | rec | probe")
     end
     dirty = true
 end

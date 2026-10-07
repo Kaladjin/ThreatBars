@@ -45,7 +45,7 @@ jobs:
         if: steps.exists.outputs.skip == 'false'
         run: |
           mkdir -p dist/ThreatBars
-          cp ThreatBars.toc ThreatBars.lua Options.lua LICENSE CHANGELOG.md dist/ThreatBars/
+          cp ThreatBars.toc *.lua LICENSE CHANGELOG.md dist/ThreatBars/
           cd dist && zip -r "ThreatBars-${{ steps.ver.outputs.tag }}.zip" ThreatBars
 
       - name: Notes de version (section du CHANGELOG)

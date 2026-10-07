@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0] - 2026-10-07
+- **Détail de votre menace par capacité** (clic sur votre ligne, Maj+clic pour épingler), présenté comme le détail des dégâts du meter Blizzard : icône, menace totale, menace par seconde, % du total.
+  - Calculé après le combat, pour la rencontre affichée (ou le dernier combat depuis « Actuel »).
+  - Démêle sorts lancés, Frappe héroïque et autres sorts « au prochain coup », coups blancs et effets périodiques (Pourfendre, Blessures profondes…).
+  - Estimation statistique : ce qui ne peut pas être relié à une capacité s'affiche en « Non attribué ».
+- Commande `/tb rec` : sauvegarde les mesures brutes du dernier combat (pour affiner l'estimation).
+
 ## [0.4.0] - 2026-10-06
 - **Menace par seconde** entre parenthèses à côté de la valeur, comme les DPS du meter Blizzard : `125M (2.1M)  100%`. Moyenne depuis que le mob est suivi.
 - **Historique des 10 dernières rencontres** : sélecteur de session dans l'en-tête (même place que sur le meter Blizzard), « Actuel » ou une rencontre passée avec sa durée et son heure. L'état de fin de combat est figé (menace, TPS, écart).

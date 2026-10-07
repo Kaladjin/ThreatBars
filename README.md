@@ -39,6 +39,15 @@ Une rencontre = un combat. Si tu as ciblé plusieurs mobs, c'est celui suivi le 
 Son + voile rouge quand un DPS approche du pull (90 % par défaut).
 Si tu es DPS, l'alerte se déclenche quand c'est toi qui approches.
 
+## 🔍 Détail par capacité
+
+Clique sur **ta** ligne pour voir d'où vient ta menace, comme le détail des dégâts du meter Blizzard : icône, menace totale, menace par seconde et part du total. **Maj+clic** épingle la fenêtre.
+
+- Le détail est calculé **après le combat**, pour la rencontre affichée (ou le dernier combat quand tu es sur « Actuel »).
+- Sans combat log, le jeu ne donne qu'un total de menace : l'addon relève ta menace en continu et la relie aux événements (sorts lancés, Frappe héroïque et autres sorts « au prochain coup », coups blancs, ticks de DoT). C'est une **estimation** : ce qui ne peut pas être relié à une capacité s'affiche en « Non attribué ».
+- Survole une ligne pour voir le nombre d'utilisations et la menace par utilisation.
+- Seule ta propre menace est détaillée.
+
 ## ⚙️ Options
 
 Roue crantée dans l'en-tête du meter, ou `/tb`.
@@ -63,6 +72,7 @@ Déplacer : glisser l'en-tête. Redimensionner : coin bas-droit.
 | `/tb show` / `/tb hide` | affiche / masque |
 | `/tb reset` | réglages par défaut |
 | `/tb clearlog` | efface l'historique |
+| `/tb rec` | sauvegarde les mesures brutes du dernier combat (diagnostic du détail) |
 | `/tb probe` | diagnostic (à lancer en combat pour un rapport de bug) |
 
 ## 🐛 Signaler un bug
