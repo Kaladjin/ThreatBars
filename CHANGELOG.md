@@ -1,11 +1,15 @@
 # Changelog
 
-## [0.5.0] - 2026-10-07
-- **Détail de votre menace par capacité** (clic sur votre ligne, Maj+clic pour épingler), présenté comme le détail des dégâts du meter Blizzard : icône, menace totale, menace par seconde, % du total.
-  - Calculé après le combat, pour la rencontre affichée (ou le dernier combat depuis « Actuel »).
-  - Démêle sorts lancés, Frappe héroïque et autres sorts « au prochain coup », coups blancs et effets périodiques (Pourfendre, Blessures profondes…).
-  - Estimation statistique : ce qui ne peut pas être relié à une capacité s'affiche en « Non attribué ».
+## [0.5.1] - 2026-10-08
+- **Détail de votre menace par capacité** (clic sur votre ligne, Maj+clic pour épingler), présenté comme le détail des dégâts du meter Blizzard : icône, menace totale, menace par seconde, % du total. Calculé après le combat.
+- Méthode :
+  - menace totale relevée sur **tous les mobs** du combat (cible + barres de vie ennemies) ;
+  - dégâts et soins **exacts** par sort lus dans le meter Blizzard (coups blancs, DoT, procs, auras, Bouclier sacré, Épines, Consécration… compris) ;
+  - sorts **sans dégâts** générant de la menace (Fracasser armure, cris, Provocation…) : liste fermée, menace mesurée directement après chaque lancer isolé. Un sort hors liste sans dégâts (Maîtrise du blocage…) ne reçoit jamais de menace ;
+  - sorts à dégâts lancés (Frappe héroïque, Vengeance…) : menace mesurée directement quand c'est possible (bonus de menace compris), sinon part calculée sur leurs dégâts ;
+  - le total affiché est toujours égal à la menace réelle.
 - Commande `/tb rec` : sauvegarde les mesures brutes du dernier combat (pour affiner l'estimation).
+- Les barres de vie ennemies (touche V) doivent être affichées pour la mesure multi-cibles.
 
 ## [0.4.0] - 2026-10-06
 - **Menace par seconde** entre parenthèses à côté de la valeur, comme les DPS du meter Blizzard : `125M (2.1M)  100%`. Moyenne depuis que le mob est suivi.

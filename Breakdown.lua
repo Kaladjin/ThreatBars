@@ -1,51 +1,52 @@
 --[[
-ThreatBars : détail de VOTRE menace par capacité (estimation calculée après le combat)
+ThreatBars : détail de VOTRE menace par capacité (calculé après le combat)
 
-Sans combat log, le serveur ne donne qu'un total de menace. On enregistre donc pendant le combat :
-  * la menace du joueur sur le mob affiché, à chaque fois qu'elle change (relevé à chaque image) ;
-  * les sorts lancés (UNIT_SPELLCAST_SUCCEEDED) ;
-  * les sorts "au prochain coup" (Frappe héroïque, Enchaînement, Mutiler…) : repérés parce qu'ils
-    restent "en attente" (IsCurrentSpell) ; on note le moment où ils partent réellement ;
-  * les périodes d'attaque automatique (coups blancs) ;
-  * vos effets périodiques présents sur le mob (DoT), d'après ses auras.
-
-Après le combat, chaque hausse de menace (entre deux relevés) est reliée aux événements survenus
-juste avant : sorts lancés, Frappes héroïques parties, coups blancs (prévus à partir de la vitesse
-de l'arme), ticks de DoT (toutes les 3 s). On cherche la menace par événement qui explique le mieux
-l'ensemble (moindres carrés positifs), ce qui démêle aussi les événements regroupés dans une même
-mise à jour du serveur. Le décalage entre un événement et sa mise à jour est choisi automatiquement.
-Ce qui reste inexpliqué est affiché en « Non attribué ».
+Principe (0.5.1) — on part de ce qui est sûr et on ne devine rien :
+  1. Menace totale : relevée en continu sur TOUS les mobs du combat (cible + barres de vie
+     ennemies), par mob. Le total est la somme de votre menace finale sur chaque mob.
+  2. Dégâts et soins exacts par sort : lus après le combat dans le meter intégré de Blizzard
+     (C_DamageMeter). Ils couvrent aussi ce qui n'a pas d'événement de sort : coups blancs, DoT,
+     procs, auras, Bouclier sacré, Épines, Consécration…
+  3. Sorts SANS dégâts qui génèrent de la menace (Fracasser armure, cris, Provocation…) : liste
+     fermée. Leur menace est mesurée directement : saut de menace (sur tous les mobs) juste après
+     chaque lancer « propre » (sans autre sort ni coup blanc prévu autour), valeur médiane.
+     Un sort hors liste et sans dégâts (Maîtrise du blocage, Rage sanguinaire…) ne reçoit jamais
+     de menace.
+  4. Sorts À dégâts que vous lancez (Frappe héroïque, Vengeance, Heurt de bouclier…) : même mesure
+     directe quand il y a assez de lancers propres, ce qui capte leurs bonus de menace.
+  5. Le reste de la menace est réparti sur les autres sources selon leurs dégâts exacts (soins
+     comptés pour moitié). Le total affiché est donc toujours égal à la menace réelle.
 ]]
 
 local addonName, ns = ...
 
 local AUTO_ATTACK = 6603
-local DOT_PERIOD = 3        -- intervalle supposé entre deux ticks de DoT (s)
-local LAGS = {}               -- décalages testés entre un événement et sa mise à jour : 0 à 0,6 s
-for i = 0, 24 do LAGS[#LAGS + 1] = i * 0.025 end
-local MAX_SAMPLES = 20000
-local DOT_SCAN_EVERY = 0.5
+local MAX_SAMPLES = 40000
+local MEASURE_MIN, MEASURE_MAX = 0.4, 1.4 -- durée de mesure après un lancer (s), adaptée au
+                                           -- rythme des mises à jour de menace du serveur
+local QUIET_BEFORE = 0.3 -- aucun autre événement juste avant le lancer (s)
+local MIN_CLEAN_DMG = 3  -- lancers propres nécessaires pour mesurer un sort à dégâts
+local DMT = Enum and Enum.DamageMeterType or {}
+local DM_DAMAGE, DM_HEAL = DMT.DamageDone or 0, DMT.HealingDone or 2
 
--- Effets périodiques reconnus (noms FR et EN). Les autres auras (Fracasser armure, cris…)
--- ne génèrent pas de menace dans la durée et ne doivent pas être confondues avec un DoT.
-local DOT_NAMES = {}
+-- Sorts sans dégâts qui génèrent de la menace (noms FR et EN). Complétable.
+local THREAT_NO_DAMAGE = {}
 for _, n in ipairs({
-    "Pourfendre", "Rend", "Blessures profondes", "Deep Wounds",
-    "Garrot", "Garrote", "Rupture",
-    "Morsure de serpent", "Serpent Sting",
-    "Corruption", "Malédiction d'agonie", "Curse of Agony", "Siphon de vie", "Siphon Life",
-    "Immolation", "Immolate",
-    "Mot de l'ombre : Douleur", "Mot de l'ombre : douleur", "Shadow Word: Pain",
-    "Peste dévorante", "Devouring Plague",
-    "Éclat lunaire", "Moonfire", "Essaim d'insectes", "Insect Swarm",
-    "Griffure", "Rake", "Déchirure", "Rip",
-    "Horion de flammes", "Flame Shock",
-}) do DOT_NAMES[n] = true end
-
--- Effets au sol / à durée lancés par le joueur (pas d'aura sur le mob) : nom -> { durée, période }
-local TIMED_EFFECTS = { ["Consécration"] = { 8, 1 }, ["Consecration"] = { 8, 1 } }
+    "Fracasser armure", "Sunder Armor",
+    "Cri démoralisant", "Demoralizing Shout",
+    "Cri de guerre", "Battle Shout",
+    "Cri de commandement", "Commanding Shout",
+    "Provocation", "Taunt",
+    "Rugissement démoralisant", "Demoralizing Roar",
+    "Grondement", "Growl",
+    "Rugissement provocateur", "Challenging Roar",
+    "Cri de défi", "Challenging Shout",
+    "Lucioles (farouche)", "Faerie Fire (Feral)", "Lucioles", "Faerie Fire",
+    "Défense vertueuse", "Righteous Defense",
+}) do THREAT_NO_DAMAGE[n] = true end
 
 local IsCur = (C_Spell and C_Spell.IsCurrentSpell) or IsCurrentSpell
+local DM = C_DamageMeter
 
 local function Usable(v) return ns.Usable(v) end
 
@@ -79,7 +80,7 @@ end
 -- Enregistrement pendant le combat
 ----------------------------------------------------------------------
 local rec          -- combat en cours
-local lastRec      -- dernier combat terminé (pour /tb rec)
+local lastRec      -- dernier combat terminé
 
 local function Push(list, item)
     if rec.n < MAX_SAMPLES then
@@ -97,39 +98,16 @@ end
 ns.BD_Start = function()
     rec = {
         t0 = GetTime(), n = 0,
-        samples = {},   -- { t, clé du mob, menace }  (menace = false : observation interrompue)
-        casts = {},     -- { t, spellID, auProchainCoup }
-        speeds = {},    -- { t, main, offhand }
-        auto = {},      -- { t, true/false }
-        dots = {},      -- { t, clé, { ids } }
-        queued = {},    -- sorts "au prochain coup" en attente : [id] = true
+        series = {},    -- [clé du mob] = { { t, menace }, ... } (menace = false : observation coupée)
         last = {},      -- dernière menace lue par mob
-        lastDots = {},
-        curKey = nil, nextDotScan = 0, autoOn = nil, nextSpeed = 0,
+        seen = {},      -- mobs vus à cette image
+        casts = {},     -- { t, spellID, auProchainCoup }
+        auto = {},      -- { t, true/false }
+        speeds = {},    -- { t, vitesse main droite, main gauche }
+        queued = {},    -- sorts "au prochain coup" en attente : [id] = true
+        nextSpeed = 0, autoOn = nil,
     }
     SetAuto(IsCurrent(AUTO_ATTACK))
-end
-
-local function ScanDots(mob, key, t)
-    local ids = {}
-    pcall(function()
-        if not (C_UnitAuras and C_UnitAuras.GetAuraDataByIndex) then return end
-        for i = 1, 40 do
-            local a = C_UnitAuras.GetAuraDataByIndex(mob, i, "HARMFUL|PLAYER")
-            if not a then break end
-            local id = a.spellId
-            if Usable(id) then
-                local name = SpellInfo(id)
-                if name and DOT_NAMES[name] then ids[#ids + 1] = id end
-            end
-        end
-    end)
-    table.sort(ids)
-    local sig = table.concat(ids, ",")
-    if rec.lastDots[key] ~= sig then
-        rec.lastDots[key] = sig
-        Push(rec.dots, { t, key, ids })
-    end
 end
 
 local function RecordSpeed(now)
@@ -139,6 +117,30 @@ local function RecordSpeed(now)
     local last = rec.speeds[#rec.speeds]
     if not last or math.abs(last[2] - mh) > 0.01 or (last[3] or 0) ~= (oh or 0) then
         Push(rec.speeds, { now, mh, oh })
+    end
+end
+
+-- Identifiant unique du mob (jamais le nom : trois "Gnoll" doivent rester trois mobs)
+local function GuidKey(unit)
+    local g = UnitGUID(unit)
+    if Usable(g) then return g end
+end
+
+local function SampleUnit(unit, now)
+    local key = GuidKey(unit)
+    if not key or rec.seen[key] then return end
+    rec.seen[key] = true
+    local ok, _, _, _, _, v = pcall(UnitDetailedThreatSituation, "player", unit)
+    local s = rec.series[key]
+    if ok and Usable(v) then -- Usable gère nil et les valeurs secrètes
+        if rec.last[key] ~= v then
+            rec.last[key] = v
+            if not s then s = {}; rec.series[key] = s end
+            Push(s, { now, v })
+        end
+    elseif s and rec.last[key] then
+        rec.last[key] = false -- valeur secrète ou plus de menace : on coupe la série
+        Push(s, { now, false })
     end
 end
 
@@ -155,32 +157,21 @@ local function Sample(now)
         rec.nextSpeed = now + 1
     end
 
+    wipe(rec.seen)
+    -- cible (ou cible de la cible / focus), puis tous les ennemis qui ont une barre de vie
     local mob = ns.PickMob()
-    local key = mob and ns.MobKey(mob)
-    if key ~= rec.curKey then
-        if rec.curKey and rec.last[rec.curKey] then
-            Push(rec.samples, { now, rec.curKey, false }) -- on arrête d'observer l'ancien mob
+    if mob then SampleUnit(mob, now) end
+    if C_NamePlate and C_NamePlate.GetNamePlates then
+        local ok, plates = pcall(C_NamePlate.GetNamePlates)
+        if ok and plates then
+            for _, plate in ipairs(plates) do
+                local u = plate.namePlateUnitToken
+                if u then
+                    local hostile = UnitCanAttack("player", u)
+                    if ns.SafeTrue(hostile) then SampleUnit(u, now) end
+                end
+            end
         end
-        rec.curKey = key
-        if key then rec.last[key] = nil end
-    end
-    if not key then return end
-
-    local ok, _, _, _, _, v = pcall(UnitDetailedThreatSituation, "player", mob)
-    if ok and Usable(v) then -- Usable gère nil et les valeurs secrètes (pas de comparaison directe)
-        if rec.last[key] ~= v then
-            rec.last[key] = v
-            Push(rec.samples, { now, key, v })
-            ScanDots(mob, key, now)
-            rec.nextDotScan = now + DOT_SCAN_EVERY
-        elseif now >= rec.nextDotScan then
-            ScanDots(mob, key, now)
-            rec.nextDotScan = now + DOT_SCAN_EVERY
-        end
-    elseif rec.last[key] then
-        -- valeur secrète ou absente : on coupe la chaîne pour ne pas inventer un saut
-        rec.last[key] = false
-        Push(rec.samples, { now, key, false })
     end
 end
 
@@ -212,35 +203,6 @@ end)
 ----------------------------------------------------------------------
 -- Analyse après le combat
 ----------------------------------------------------------------------
--- Moindres carrés positifs par descente de coordonnées sur les équations normales
-local function NNLS(rows, y, m)
-    local G, b = {}, {}
-    for j = 1, m do G[j] = {}; b[j] = 0 end
-    for i, row in ipairs(rows) do
-        for j, aj in pairs(row) do
-            b[j] = b[j] + aj * y[i]
-            local Gj = G[j]
-            for k, ak in pairs(row) do Gj[k] = (Gj[k] or 0) + aj * ak end
-        end
-    end
-    local x = {}
-    for j = 1, m do x[j] = 0 end
-    for _ = 1, 400 do
-        for j = 1, m do
-            local gjj = G[j][j] or 0
-            if gjj > 0 then
-                local sum = b[j]
-                for k, gjk in pairs(G[j]) do
-                    if k ~= j then sum = sum - gjk * x[k] end
-                end
-                x[j] = math.max(0, sum / gjj)
-            end
-        end
-    end
-    return x
-end
-
--- Périodes "actives" à partir d'une liste d'événements { t, on }
 local function Periods(events, tEnd)
     local list, start = {}, nil
     for _, e in ipairs(events) do
@@ -259,18 +221,11 @@ local function SpeedAt(r, t)
     return mh, oh
 end
 
--- Liste de tous les événements susceptibles de produire de la menace : { t, colonne, info }
-local function BuildEvents(r, tEnd)
-    local ev = {}
-    local function Add(t, key, info) ev[#ev + 1] = { t, key, info } end
-
-    -- sorts lancés et sorts "au prochain coup"
-    for _, c in ipairs(r.casts) do
-        Add(c[1], "c" .. c[2], { kind = "cast", id = c[2] })
-    end
-
-    -- coups blancs prévus : départ de l'attaque auto, puis tous les "vitesse d'arme" ;
-    -- une Frappe héroïque remplace un coup et recale le rythme
+-- Heures prévues des coups blancs (départ de l'attaque auto puis tous les "vitesse d'arme" ;
+-- une Frappe héroïque remplace un coup et recale le rythme). Servent seulement à écarter
+-- les lancers qui tombent en même temps qu'un coup blanc.
+local function PredictSwings(r, tEnd)
+    local swings = {}
     for _, p in ipairs(Periods(r.auto, tEnd)) do
         local anchors = { p[1] }
         for _, c in ipairs(r.casts) do
@@ -279,198 +234,270 @@ local function BuildEvents(r, tEnd)
         table.sort(anchors)
         for i, a in ipairs(anchors) do
             local spd = SpeedAt(r, a)
-            local stop = (anchors[i + 1] or p[2])
+            local stop = anchors[i + 1] or p[2]
             local t = (i == 1) and a or (a + spd)
-            while t < stop - 0.25 * spd do
-                Add(t, "auto", { kind = "auto", id = AUTO_ATTACK })
-                t = t + spd
-            end
+            while t < stop - 0.25 * spd do swings[#swings + 1] = t; t = t + spd end
         end
         local _, oh = SpeedAt(r, p[1])
-        if oh then -- main gauche : son propre rythme, sans recalage possible
+        if oh then
             local t = p[1]
-            while t < p[2] do
-                Add(t, "auto", { kind = "auto", id = AUTO_ATTACK })
-                t = t + oh
-            end
+            while t < p[2] do swings[#swings + 1] = t; t = t + oh end
         end
     end
-
-    -- ticks de DoT (d'après la présence de l'aura sur le mob)
-    local open = {}
-    local function Close(key, id, st, en)
-        local t = st + DOT_PERIOD
-        while t <= en + 0.2 do
-            Add(t, "d" .. id, { kind = "dot", id = id, key = key })
-            t = t + DOT_PERIOD
-        end
-    end
-    for _, d in ipairs(r.dots) do
-        local t, key, ids = d[1], d[2], d[3]
-        open[key] = open[key] or {}
-        local now = {}
-        for _, id in ipairs(ids) do now[id] = true end
-        for id, st in pairs(open[key]) do
-            if not now[id] then Close(key, id, st, t); open[key][id] = nil end
-        end
-        for id in pairs(now) do
-            if not open[key][id] then open[key][id] = t end
-        end
-    end
-    for key, ids in pairs(open) do
-        for id, st in pairs(ids) do Close(key, id, st, tEnd) end
-    end
-
-    -- effets à durée lancés (Consécration…)
-    for _, c in ipairs(r.casts) do
-        local name = SpellInfo(c[2])
-        local te = name and TIMED_EFFECTS[name]
-        if te then
-            local t = c[1] + te[2]
-            while t <= c[1] + te[1] + 0.05 do
-                Add(t, "p" .. c[2], { kind = "dot", id = c[2] })
-                t = t + te[2]
-            end
-        end
-    end
-
-    table.sort(ev, function(x, y) return x[1] < y[1] end)
-    return ev
+    table.sort(swings)
+    return swings
 end
 
--- Intervalles entre deux relevés consécutifs d'un même mob : { key, t1, t2, dy }
-local function BuildIntervals(r)
-    local byKey, out = {}, {}
-    for _, s in ipairs(r.samples) do
-        local list = byKey[s[2]] or {}
-        byKey[s[2]] = list
-        list[#list + 1] = s
+-- Valeur d'une série à l'instant t (dernier relevé <= t) ; nil si inconnue ou coupée
+local function ValueAt(s, t)
+    local v
+    for _, p in ipairs(s) do
+        if p[1] > t then break end
+        v = p[2]
     end
-    for key, list in pairs(byKey) do
-        local prev
-        for _, s in ipairs(list) do
-            if s[3] == false then
-                prev = nil
-            else
-                if prev then out[#out + 1] = { key = key, t1 = prev[1], t2 = s[1], dy = s[3] - prev[3] } end
-                prev = s
+    return v
+end
+
+local function HasCut(s, t1, t2)
+    for _, p in ipairs(s) do
+        if p[1] > t2 then break end
+        if p[1] > t1 and p[2] == false then return true end
+    end
+    return false
+end
+
+-- Saut de menace (tous mobs confondus) entre juste avant un lancer et MEASURE s après ;
+-- nil si le lancer n'est pas "propre" (autre sort ou coup blanc prévu dans la fenêtre)
+local function MeasureCast(r, c, swings, measure)
+    local tc = c[1]
+    local t1, t2 = tc - 0.02, tc + measure
+    -- rien d'autre ni pendant la mesure, ni juste avant (une menace pas encore envoyée
+    -- par le serveur fausserait le saut) : la zone calme suit la durée de mesure
+    local quiet = math.max(QUIET_BEFORE, measure)
+    for _, o in ipairs(r.casts) do
+        if o ~= c and o[1] > tc - quiet and o[1] <= t2 then return nil end
+    end
+    for _, sw in ipairs(swings) do
+        if sw > t2 then break end
+        -- un sort "au prochain coup" EST le coup : seuls les autres coups comptent
+        if sw > tc - quiet and not (c[3] and math.abs(sw - tc) < 0.15) then return nil end
+    end
+    local delta, any = 0, false
+    for _, s in pairs(r.series) do
+        if not HasCut(s, t1, t2) then
+            local a, b = ValueAt(s, t1), ValueAt(s, t2)
+            if b and b ~= false then
+                delta = delta + (b - ((a and a ~= false) and a or 0))
+                any = true
             end
         end
     end
-    table.sort(out, function(x, y) return x.t1 < y.t1 end)
-    return out
+    return any and delta or nil
 end
 
--- Construit le système pour un décalage donné et le résout
-local function Fit(intervals, events, lag)
-    local cols, colIndex = {}, {}
-    local A, y, used = {}, {}, {}
-    local ei = 1
-    for _, iv in ipairs(intervals) do
-        local row = {}
-        -- événements dont l'effet (t + décalage) tombe dans l'intervalle
-        while events[ei] and events[ei][1] + lag <= iv.t1 do ei = ei + 1 end
-        local k = ei
-        while events[k] and events[k][1] + lag <= iv.t2 do
-            local e = events[k]
-            if e[3].kind ~= "dot" or not e[3].key or e[3].key == iv.key then
-                local j = colIndex[e[2]]
-                if not j then
-                    cols[#cols + 1] = e[3]
-                    j = #cols
-                    colIndex[e[2]] = j
+local function Median(t)
+    if #t == 0 then return nil end
+    table.sort(t)
+    local n = #t
+    if n % 2 == 1 then return t[(n + 1) / 2] end
+    return (t[n / 2] + t[n / 2 + 1]) / 2
+end
+
+-- Dégâts / soins exacts du joueur par sort pour le combat qui vient de finir
+local function ReadMeter(fightDuration)
+    if not (DM and DM.GetCombatSessionSourceFromID) then return nil end
+    local guid = UnitGUID("player")
+    if not Usable(guid) then return nil end
+
+    local sessionID
+    pcall(function()
+        local best
+        for _, s in ipairs(DM.GetAvailableCombatSessions() or {}) do
+            local id, d = s.sessionID, s.durationSeconds
+            if Usable(id) and (not best or id > best) then
+                if not Usable(d) or math.abs(d - fightDuration) <= math.max(3, fightDuration * 0.25) then
+                    best = id
                 end
-                row[j] = (row[j] or 0) + 1
             end
-            k = k + 1
         end
-        -- une baisse de menace sans événement (reset, effet du mob) n'apprend rien : on l'écarte
-        if iv.dy > 0 or next(row) then
-            A[#A + 1] = row
-            y[#y + 1] = iv.dy
-            for j, v in pairs(row) do used[j] = (used[j] or 0) + v end
+        sessionID = best
+    end)
+
+    local function Read(meterType)
+        local src
+        pcall(function()
+            if sessionID then
+                src = DM.GetCombatSessionSourceFromID(sessionID, meterType, guid)
+            else
+                src = DM.GetCombatSessionSourceFromType(1, meterType, guid) -- session courante
+            end
+        end)
+        local out = {}
+        for _, sp in ipairs(src and src.combatSpells or {}) do
+            local id, amount = sp.spellID, sp.totalAmount
+            if not (Usable(id) and Usable(amount)) then return nil end
+            if amount > 0 then out[id] = (out[id] or 0) + amount end
         end
+        return out
     end
-    local x = NNLS(A, y, #cols)
-    local sse = 0
-    for i, row in ipairs(A) do
-        local pred = 0
-        for j, v in pairs(row) do pred = pred + x[j] * v end
-        sse = sse + (y[i] - pred) ^ 2
-    end
-    return { x = x, cols = cols, used = used, y = y, sse = sse, n = #A }
+    local dmg = Read(DM_DAMAGE)
+    if not dmg then return nil end
+    return dmg, Read(DM_HEAL) or {}
 end
 
-local function Analyse(r, tEnd)
-    local intervals = BuildIntervals(r)
-    if #intervals < 3 then return nil end
-    local events = BuildEvents(r, tEnd)
-
-    -- choix du décalage qui explique le mieux les relevés
-    local best, bestLag
-    for _, lag in ipairs(LAGS) do
-        local f = Fit(intervals, events, lag)
-        if not best or f.sse < best.sse then best, bestLag = f, lag end
-    end
-
+local function Analyse(r, tEnd, fightDuration)
+    -- 1. menace totale réelle : somme de la menace finale (lisible) sur chaque mob
     local total = 0
-    for _, v in ipairs(best.y) do total = total + v end
+    for _, s in pairs(r.series) do
+        local last
+        for _, p in ipairs(s) do if p[2] ~= false then last = p[2] end end
+        if last and last > 0 then total = total + last end
+    end
     if total <= 0 then return nil end
 
-    local counts = {}
-    for _, c in ipairs(r.casts) do counts[c[2]] = (counts[c[2]] or 0) + 1 end
-
-    -- totaux par capacité (lancer + partie périodique regroupés sous le même nom)
-    local byName, explained = {}, 0
-    for j, info in ipairs(best.cols) do
-        local amount = best.x[j] * (best.used[j] or 0)
-        if amount > 0 then
-            local name, icon = SpellInfo(info.id)
-            if info.kind == "auto" then name = "Attaque automatique" end
-            name = name or ("Sort " .. info.id)
-            local e = byName[name]
-            if not e then
-                e = { name = name, icon = icon, id = info.id, total = 0, count = 0 }
-                byName[name] = e
-            end
-            e.total = e.total + amount
-            if info.kind == "cast" then
-                e.count = counts[info.id] or e.count
-                e.id, e.icon = info.id, icon or e.icon -- l'icône du sort lancé prime
-            elseif info.kind == "auto" then
-                e.count = e.count + (best.used[j] or 0)
-            end
-            explained = explained + amount
+    -- 2. mesure directe des lancers propres ; la fenêtre suit le rythme des mises à jour serveur
+    -- délai entre un lancer et le premier changement de menace qui suit (sur n'importe quel mob) :
+    -- sa médiane vaut environ la moitié de l'intervalle de mise à jour du serveur
+    local changes = {}
+    for _, s in pairs(r.series) do
+        for i = 2, #s do
+            if s[i][2] ~= false then changes[#changes + 1] = s[i][1] end
         end
     end
-    local rows = {}
-    for _, e in pairs(byName) do rows[#rows + 1] = e end
-    local rest = total - explained
-    if rest > total * 0.03 then
-        rows[#rows + 1] = { name = "Non attribué", icon = 134400, total = rest, count = 0, other = true }
+    table.sort(changes)
+    local delays, ci = {}, 1
+    for _, c in ipairs(r.casts) do
+        while changes[ci] and changes[ci] < c[1] do ci = ci + 1 end
+        if changes[ci] and changes[ci] - c[1] < 2 then delays[#delays + 1] = changes[ci] - c[1] end
     end
-    table.sort(rows, function(a, b) return a.total > b.total end)
-    return { total = math.max(total, explained), rows = rows, lag = bestLag, intervals = best.n }
+    local measure = math.min(MEASURE_MAX, math.max(MEASURE_MIN, (Median(delays) or 0.2) * 2 + 0.1))
+    local swings = PredictSwings(r, tEnd)
+    local counts, clean = {}, {}
+    for _, c in ipairs(r.casts) do
+        local id = c[2]
+        counts[id] = (counts[id] or 0) + 1
+        local d = MeasureCast(r, c, swings, measure)
+        if d then
+            clean[id] = clean[id] or {}
+            table.insert(clean[id], d)
+        end
+    end
+
+    -- 3. dégâts et soins exacts
+    local dmg, heal = ReadMeter(fightDuration)
+
+    local rows = {}
+    local function Row(id, amount, count, kind)
+        local name, icon = SpellInfo(id)
+        if id == AUTO_ATTACK or id == 1 then name = "Attaque automatique"; icon = icon or 135274 end
+        rows[#rows + 1] = { name = name or ("Sort " .. id), icon = icon, id = id, total = amount, count = count or 0, kind = kind }
+    end
+
+    -- 4. sorts sans dégâts de la liste : menace mesurée
+    local fixed, fixedRows, unmeasured = 0, {}, {}
+    for id, n in pairs(counts) do
+        local name = SpellInfo(id)
+        local isDamage = dmg and dmg[id]
+        if name and THREAT_NO_DAMAGE[name] and not isDamage then
+            local per = clean[id] and math.max(0, Median(clean[id]) or 0) or 0
+            if per > 0 then
+                fixedRows[#fixedRows + 1] = { id, per * n, n }
+                fixed = fixed + per * n
+            else
+                unmeasured[#unmeasured + 1] = name -- aucun lancer propre : sa menace reste dans le reste
+            end
+        end
+    end
+    if fixed > total then -- mesures trop hautes : on les ramène au total
+        for _, fr in ipairs(fixedRows) do fr[2] = fr[2] * total / fixed end
+        fixed = total
+    end
+    for _, fr in ipairs(fixedRows) do Row(fr[1], fr[2], fr[3], "fixed") end
+    local rest = total - fixed
+
+    if not dmg then
+        -- meter Blizzard indisponible : on ne peut pas répartir le reste honnêtement
+        if rest > 0 then
+            rows[#rows + 1] = { name = "Autres sources (détail indisponible)", icon = 134400, total = rest, count = 0, other = true }
+        end
+    else
+        -- 5. sorts à dégâts lancés avec assez de mesures propres : menace mesurée (bonus compris)
+        local measured, mRows = 0, {}
+        for id, n in pairs(counts) do
+            if dmg[id] and clean[id] and #clean[id] >= MIN_CLEAN_DMG then
+                local per = math.max(0, Median(clean[id]) or 0)
+                mRows[id] = per * n
+                measured = measured + per * n
+            end
+        end
+        -- 6. le reste réparti selon les dégâts exacts (soins pour moitié)
+        local pool = {}
+        local weight = 0
+        for id, amount in pairs(dmg) do
+            if not mRows[id] then pool[id] = amount; weight = weight + amount end
+        end
+        for id, amount in pairs(heal) do
+            pool[id] = (pool[id] or 0) + amount * 0.5
+            weight = weight + amount * 0.5
+        end
+        if measured > rest or (weight == 0 and measured < rest) then
+            -- mesures incohérentes avec le total : tout répartir selon les dégâts
+            wipe(mRows); measured = 0
+            wipe(pool); weight = 0
+            for id, amount in pairs(dmg) do pool[id] = amount; weight = weight + amount end
+            for id, amount in pairs(heal) do pool[id] = (pool[id] or 0) + amount * 0.5; weight = weight + amount * 0.5 end
+        end
+        for id, amount in pairs(mRows) do Row(id, amount, counts[id], "measured") end
+        local remaining = rest - measured
+        if weight > 0 then
+            for id, w in pairs(pool) do Row(id, remaining * w / weight, counts[id], "share") end
+        elseif remaining > 0 then
+            rows[#rows + 1] = { name = "Autres sources", icon = 134400, total = remaining, count = 0, other = true }
+        end
+    end
+
+    -- fusion des lignes de même nom, tri
+    local byName, merged = {}, {}
+    for _, row in ipairs(rows) do
+        local e = byName[row.name]
+        if e then e.total = e.total + row.total; e.count = math.max(e.count, row.count)
+        else byName[row.name] = row; merged[#merged + 1] = row end
+    end
+    for i = #merged, 1, -1 do if merged[i].total <= 0 then table.remove(merged, i) end end
+    table.sort(merged, function(a, b) return a.total > b.total end)
+    table.sort(unmeasured)
+    return { total = total, rows = merged, meter = dmg and true or false, measure = measure, unmeasured = unmeasured }
 end
 
+-- Appelé à la fin du combat. Renvoie tout de suite un objet qui sera rempli ~1 s plus tard,
+-- le temps que le meter Blizzard clôture la session et que ses valeurs redeviennent lisibles.
 ns.BD_Finish = function(fightDuration)
     if not rec then return nil end
     local r = rec
     rec = nil
     local tEnd = GetTime()
-    for id in pairs(r.queued) do r.queued[id] = nil end
+    wipe(r.queued)
     lastRec = r
     local db = ns.GetDB()
     if db and db.recordDebug then
-        db.debugRec = { samples = r.samples, casts = r.casts, auto = r.auto, dots = r.dots, speeds = r.speeds, t0 = r.t0, tEnd = tEnd }
+        db.debugRec = { series = r.series, casts = r.casts, auto = r.auto, speeds = r.speeds, t0 = r.t0, tEnd = tEnd }
     end
-    local ok, res = pcall(Analyse, r, tEnd)
-    if not ok then
-        if db and db.recordDebug then print("|cffc79c6e[ThreatBars]|r erreur d'analyse : " .. tostring(res)) end
-        return nil
-    end
-    if res then res.duration = fightDuration end
-    return res
+    local bd = { pending = true, created = time() }
+    C_Timer.After(1, function()
+        local ok, res = pcall(Analyse, r, tEnd, fightDuration)
+        bd.pending = nil
+        if ok and res then
+            for k, v in pairs(res) do bd[k] = v end
+            bd.duration = fightDuration
+        else
+            bd.failed = true
+            if not ok and db and db.recordDebug then
+                print("|cffc79c6e[ThreatBars]|r erreur d'analyse : " .. tostring(res))
+            end
+        end
+        if ns.RefreshBreakdown then ns.RefreshBreakdown() end
+    end)
+    return bd
 end
 
 ----------------------------------------------------------------------
@@ -578,8 +605,13 @@ local function GetEntry(i)
             GameTooltip:AddDoubleLine("Utilisations", tostring(d.count), 1, 0.82, 0, 1, 1, 1)
             GameTooltip:AddDoubleLine("Menace par utilisation", ns.Abbrev(d.total / d.count) or "?", 1, 0.82, 0, 1, 1, 1)
         end
-        if d.other then
-            GameTooltip:AddLine("Menace qui n'a pas pu être reliée à une capacité\n(rage, soins reçus, bruit de mesure…)", 1, 1, 1, true)
+        GameTooltip:AddLine(" ")
+        if d.kind == "fixed" or d.kind == "measured" then
+            GameTooltip:AddLine("Menace mesurée directement après chaque lancer.", 0.7, 0.7, 0.7, true)
+        elseif d.kind == "share" then
+            GameTooltip:AddLine("Part de menace calculée à partir des dégâts exacts du meter Blizzard.", 0.7, 0.7, 0.7, true)
+        elseif d.other then
+            GameTooltip:AddLine("Le meter Blizzard n'a pas donné de dégâts lisibles pour ce combat.", 0.7, 0.7, 0.7, true)
         end
         GameTooltip:Show()
     end)
@@ -596,13 +628,28 @@ local FAKE_BREAKDOWN = {
         { name = "Attaque automatique", icon = 135274, id = AUTO_ATTACK, total = 21000000, count = 0 },
         { name = "Vengeance", icon = 132353, id = 6572, total = 17000000, count = 9 },
         { name = "Pourfendre", icon = 132155, id = 772, total = 6000000, count = 2 },
-        { name = "Non attribué", icon = 134400, total = 7000000, count = 0, other = true },
+        { name = "Cri démoralisant", icon = 132366, id = 1160, total = 7000000, count = 3 },
     },
 }
 
 ns.RefreshBreakdown = function()
     if not win or not win:IsShown() then return end
+    if current.entry and not current.bd then -- calcul terminé entre-temps ?
+        local bd = current.entry.breakdown
+        if bd and not bd.pending then
+            if bd.rows then
+                current.bd, current.msg = bd, nil
+                current.label = string.format("Estimation · %s [%s]", current.entry.mob or "?", ns.FormatClock(current.entry.duration or 0))
+            else
+                current.msg = "Pas assez de mesures pour ce combat\n(combat trop court, ou valeurs masquées par le jeu)."
+            end
+            current.entry = nil
+        end
+    end
     local bd, label, msg = current.bd, current.label, current.msg
+    if bd and bd.unmeasured and #bd.unmeasured > 0 then
+        label = (label or "") .. "  |cffff9933· non mesuré : " .. table.concat(bd.unmeasured, ", ") .. "|r"
+    end
     caption:SetText(label or "")
     for _, e in ipairs(entries) do e:Hide() end
     if not bd then
@@ -680,9 +727,14 @@ ns.OnEntryClick = function(row, button)
     else
         entry = db.log[1] -- dernier combat
     end
+    local bd = entry and entry.breakdown
+    if bd and bd.pending and time() - (bd.created or 0) > 30 then bd.pending = nil; bd.failed = true end
     if not entry then
         data.msg = "Aucun combat enregistré."
-    elseif not entry.breakdown then
+    elseif bd and bd.pending then
+        data.msg = "Calcul en cours…"
+        data.entry = entry
+    elseif not bd or bd.failed or not bd.rows then
         data.msg = "Pas assez de mesures pour ce combat\n(combat trop court, ou valeurs masquées par le jeu)."
     else
         data.bd = entry.breakdown

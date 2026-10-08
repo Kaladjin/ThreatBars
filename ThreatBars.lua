@@ -1,5 +1,5 @@
 --[[
-ThreatBars 0.5.0 — threat meter pour WoW: Forever (interface 16001)
+ThreatBars 0.5.1 — threat meter pour WoW: Forever (interface 16001)
 Apparence calquée sur le damage meter intégré de Blizzard (Blizzard_DamageMeter) :
 mêmes atlas, polices, hauteur de barre (25) et espacement (4).
 

@@ -41,12 +41,16 @@ Si tu es DPS, l'alerte se déclenche quand c'est toi qui approches.
 
 ## 🔍 Détail par capacité
 
-Clique sur **ta** ligne pour voir d'où vient ta menace, comme le détail des dégâts du meter Blizzard : icône, menace totale, menace par seconde et part du total. **Maj+clic** épingle la fenêtre.
+Clique sur **ta** ligne pour voir d'où vient ta menace, comme le détail des dégâts du meter Blizzard : icône, menace totale, menace par seconde et part du total. **Maj+clic** épingle la fenêtre. Calculé **après le combat**, pour la rencontre affichée (ou le dernier combat quand tu es sur « Actuel »).
 
-- Le détail est calculé **après le combat**, pour la rencontre affichée (ou le dernier combat quand tu es sur « Actuel »).
-- Sans combat log, le jeu ne donne qu'un total de menace : l'addon relève ta menace en continu et la relie aux événements (sorts lancés, Frappe héroïque et autres sorts « au prochain coup », coups blancs, ticks de DoT). C'est une **estimation** : ce qui ne peut pas être relié à une capacité s'affiche en « Non attribué ».
-- Survole une ligne pour voir le nombre d'utilisations et la menace par utilisation.
-- Seule ta propre menace est détaillée.
+Comment c'est calculé (le jeu ne donne qu'un total de menace, pas de détail) :
+- **Menace totale** : relevée sur tous les mobs du combat (ta cible + les ennemis qui ont une barre de vie). Affiche les barres de vie ennemies (touche **V**) pour que les packs soient bien comptés.
+- **Dégâts et soins exacts** par sort : lus dans le meter intégré de Blizzard.
+- **Sorts sans dégâts** qui génèrent de la menace (Fracasser armure, cris, Provocation…) : menace mesurée directement juste après chaque lancer isolé. Un sort sans dégâts qui ne génère pas de menace (Maîtrise du blocage…) n'en reçoit jamais.
+- **Sorts à dégâts que tu lances** (Frappe héroïque, Vengeance…) : menace mesurée directement quand c'est possible, ce qui compte leurs bonus de menace.
+- **Le reste** (coups blancs, DoT, procs, auras…) est réparti selon les dégâts exacts. Le total est toujours égal à ta menace réelle.
+
+Si un sort sans dégâts n'a jamais pu être mesuré proprement, il est signalé en orange (« non mesuré ») en haut de la fenêtre : sa menace est alors comptée dans le reste.
 
 ## ⚙️ Options
 
